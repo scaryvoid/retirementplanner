@@ -82,6 +82,7 @@ private:
     QPushButton    *addBtn           = nullptr;
     QPushButton    *removeBtn        = nullptr;
     QPushButton    *calcBtn          = nullptr;
+    QPushButton    *resetZoomBtn     = nullptr;
     QLabel         *summaryLabel     = nullptr;
 
     // --- chart ---
@@ -90,8 +91,10 @@ private:
     QLineSeries  *netWorthSeries   = nullptr;
     QLineSeries  *incomeSeries     = nullptr;
     QLineSeries  *expenseSeries    = nullptr;
+    QLineSeries  *debtSeries       = nullptr;
     QLineSeries  *debtPaidMarker   = nullptr;
     QLineSeries  *hoverSeries      = nullptr;
+    QVector<QLineSeries *> investmentSeries; // one per row in investmentTable, rebuilt each recalculate()
     QValueAxis   *axisX            = nullptr;
     QValueAxis   *axisY            = nullptr;
     QLabel       *hoverLabel       = nullptr;

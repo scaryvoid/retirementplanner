@@ -69,6 +69,19 @@ static QSpinBox *makeAgeSpin(int value)
     return s;
 }
 
+// Distinct color per investment line, cycled if there are more investments
+// than colors. Chosen to stay visually separate from net worth (blue),
+// income (green), expenses (red) and debt (dark red / dash-dot).
+static QColor investmentColor(int index)
+{
+    static const QVector<QColor> palette = {
+        QColor("#9467bd"), QColor("#8c564b"), QColor("#e377c2"),
+        QColor("#7f7f7f"), QColor("#bcbd22"), QColor("#17becf"),
+        QColor("#aec7e8"), QColor("#ffbb78"),
+    };
+    return palette[index % palette.size()];
+}
+
 // ---------------------------------------------------------------------------
 
 MainWindow::MainWindow(QWidget *parent)
@@ -101,7 +114,9 @@ MainWindow::MainWindow(QWidget *parent)
     auto *noteLabel = new QLabel(
         "Income = salary + pension/Social Security + investment gains.   "
         "Expenses = living costs + debt payments.\n"
-        "All figures are nominal (future dollars, not adjusted back to today).");
+        "All figures are nominal (future dollars, not adjusted back to today).\n"
+        "Zoom: drag a rectangle to zoom in, scroll to zoom in/out, double-click or "
+        "\"Reset zoom\" to see the whole projection again.");
     noteLabel->setWordWrap(true);
     noteLabel->setStyleSheet("color: #555; font-size: 11px;");
 
@@ -110,7 +125,13 @@ MainWindow::MainWindow(QWidget *parent)
     summaryLabel->setTextFormat(Qt::RichText);
     summaryLabel->setStyleSheet("font-size: 12px;");
 
+    resetZoomBtn = new QPushButton("Reset zoom");
+    auto *chartToolbar = new QHBoxLayout;
+    chartToolbar->addStretch(1);
+    chartToolbar->addWidget(resetZoomBtn);
+
     auto *rightLayout = new QVBoxLayout;
+    rightLayout->addLayout(chartToolbar);
     rightLayout->addWidget(chartView, /*stretch*/ 1);
     rightLayout->addWidget(hoverLabel);
     rightLayout->addWidget(noteLabel);
@@ -138,6 +159,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(addBtn,    &QPushButton::clicked, this, &MainWindow::addInvestmentRow);
     connect(removeBtn, &QPushButton::clicked, this, &MainWindow::removeInvestmentRow);
     connect(calcBtn,   &QPushButton::clicked, this, &MainWindow::recalculate);
+    connect(resetZoomBtn, &QPushButton::clicked, this, [this] { chart->zoomReset(); });
 
     updateTitle();
     recalculate();
@@ -231,12 +253,15 @@ void MainWindow::setupChart()
     netWorthSeries = new QLineSeries; netWorthSeries->setName("Net worth");
     incomeSeries   = new QLineSeries; incomeSeries->setName("Yearly income");
     expenseSeries  = new QLineSeries; expenseSeries->setName("Yearly expenses");
+    debtSeries     = new QLineSeries; debtSeries->setName("Debt balance");
     debtPaidMarker = new QLineSeries; debtPaidMarker->setName("Debt paid off");
     hoverSeries    = new QLineSeries; hoverSeries->setName("Cursor");
 
     QPen p1(QColor("#1f77b4")); p1.setWidth(2); netWorthSeries->setPen(p1);
     QPen p2(QColor("#2ca02c")); p2.setWidth(2); incomeSeries->setPen(p2);
     QPen p3(QColor("#d62728")); p3.setWidth(2); expenseSeries->setPen(p3);
+    QPen pd(QColor("#8c1c13")); pd.setWidth(2); pd.setStyle(Qt::DashDotLine);
+    debtSeries->setPen(pd);
     QPen pm(QColor("#ff7f0e")); pm.setWidth(2); pm.setStyle(Qt::DashLine);
     debtPaidMarker->setPen(pm);
     QPen ph(QColor("#888888")); ph.setWidth(1); ph.setStyle(Qt::DotLine);
@@ -245,6 +270,7 @@ void MainWindow::setupChart()
     chart->addSeries(netWorthSeries);
     chart->addSeries(incomeSeries);
     chart->addSeries(expenseSeries);
+    chart->addSeries(debtSeries);
     chart->addSeries(debtPaidMarker);
     chart->addSeries(hoverSeries);
 
@@ -258,7 +284,7 @@ void MainWindow::setupChart()
 
     chart->addAxis(axisX, Qt::AlignBottom);
     chart->addAxis(axisY, Qt::AlignLeft);
-    for (auto *s : { netWorthSeries, incomeSeries, expenseSeries, debtPaidMarker, hoverSeries }) {
+    for (auto *s : { netWorthSeries, incomeSeries, expenseSeries, debtSeries, debtPaidMarker, hoverSeries }) {
         s->attachAxis(axisX);
         s->attachAxis(axisY);
     }
@@ -515,8 +541,17 @@ void MainWindow::recalculate()
     netWorthSeries->clear();
     incomeSeries->clear();
     expenseSeries->clear();
+    debtSeries->clear();
     debtPaidMarker->clear();
     hoverSeries->clear();
+
+    // Investment rows can be added/removed between recalculations, so the
+    // per-investment lines are torn down and rebuilt every time.
+    for (QLineSeries *s : investmentSeries) {
+        chart->removeSeries(s);
+        delete s;
+    }
+    investmentSeries.clear();
 
     if (endAge <= curAge) {
         summaryLabel->setText(
@@ -541,6 +576,19 @@ void MainWindow::recalculate()
     for (const Investment &inv : invs) {
         balances.append(inv.value);
         sumInvest += inv.value;
+    }
+
+    investmentSeries.reserve(invs.size());
+    for (int i = 0; i < invs.size(); ++i) {
+        auto *s = new QLineSeries;
+        s->setName(invs[i].name.isEmpty() ? QString("Investment %1").arg(i + 1) : invs[i].name);
+        QPen pen(investmentColor(i));
+        pen.setWidth(2);
+        s->setPen(pen);
+        chart->addSeries(s);
+        s->attachAxis(axisX);
+        s->attachAxis(axisY);
+        investmentSeries.append(s);
     }
 
     double debt = debtSpin->value();
@@ -626,9 +674,16 @@ void MainWindow::recalculate()
         netWorthSeries->append(age, netWorth);
         incomeSeries->append(age, income);
         expenseSeries->append(age, expense);
+        debtSeries->append(age, debt);
+        for (int i = 0; i < investmentSeries.size() && i < balances.size(); ++i)
+            investmentSeries[i]->append(age, balances[i]);
 
-        minY = std::min({ minY, netWorth, income, expense });
-        maxY = std::max({ maxY, netWorth, income, expense });
+        minY = std::min({ minY, netWorth, income, expense, debt });
+        maxY = std::max({ maxY, netWorth, income, expense, debt });
+        for (double b : balances) {
+            minY = std::min(minY, b);
+            maxY = std::max(maxY, b);
+        }
 
         if (age == retAge) nwAtRetire = netWorth;
         if (depletionAge < 0 && netWorth < 0.0) depletionAge = age;

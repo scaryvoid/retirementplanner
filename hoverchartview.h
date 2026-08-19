@@ -13,6 +13,7 @@ QT_CHARTS_USE_NAMESPACE
 
 #include <QLabel>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QEvent>
 #include <QLocale>
 #include <QPointF>
@@ -20,7 +21,10 @@ QT_CHARTS_USE_NAMESPACE
 
 // A QChartView that follows the mouse: it draws a vertical crosshair at the
 // nearest age and reports net worth / income / expenses at that age into a
-// QLabel. No Qt signals are added, so this stays a header-only class (no moc).
+// QLabel. It also supports zooming: drag a rectangle to zoom into it, scroll
+// the wheel to zoom in/out around the cursor, and double-click (or right-
+// click) to reset back to the full view. No Qt signals are added, so this
+// stays a header-only class (no moc).
 class HoverChartView : public QChartView
 {
 public:
@@ -30,6 +34,7 @@ public:
         setMouseTracking(true);
         if (viewport())
             viewport()->setMouseTracking(true);
+        setRubberBand(QChartView::RectangleRubberBand);
     }
 
     void setDataSeries(QLineSeries *nw, QLineSeries *inc, QLineSeries *exp)
@@ -43,8 +48,24 @@ public:
 protected:
     void mouseMoveEvent(QMouseEvent *event) override
     {
-        updateForPos(event);
+        // While a zoom rubber-band drag is in progress, leave the crosshair
+        // alone so it doesn't fight the selection rectangle for attention.
+        if (!(event->buttons() & Qt::LeftButton))
+            updateForPos(event);
         QChartView::mouseMoveEvent(event);
+    }
+    void mouseDoubleClickEvent(QMouseEvent *event) override
+    {
+        chart()->zoomReset();
+        QChartView::mouseDoubleClickEvent(event);
+    }
+    void wheelEvent(QWheelEvent *event) override
+    {
+        if (event->angleDelta().y() > 0)
+            chart()->zoom(1.15);
+        else if (event->angleDelta().y() < 0)
+            chart()->zoom(1.0 / 1.15);
+        event->accept();
     }
     void leaveEvent(QEvent *event) override
     {
